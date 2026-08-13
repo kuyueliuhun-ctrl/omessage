@@ -10,88 +10,81 @@ function pick(obj: any, ...keys: string[]): any {
   return undefined
 }
 
+function toArray(v: any): any[] {
+  if (v === undefined || v === null) return []
+  return Array.isArray(v) ? v : [v]
+}
+
 export const OMessagePlugin: Plugin = async () => {
   if (!TOPIC) {
     console.log("[omessage] OMESSAGE_TOPIC not set, plugin disabled")
     return {}
   }
 
+  async function push(payload: any, title: string, priority: string, tags: string) {
+    try {
+      const res = await fetch(`${NTFY_URL}/${TOPIC}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Title: title,
+          Priority: priority,
+          Tags: tags,
+        },
+        body: JSON.stringify(payload),
+      })
+      if (!res.ok) console.error("[omessage] push failed:", res.status, await res.text())
+    } catch (e) {
+      console.error("[omessage] push error:", e)
+    }
+  }
+
   return {
     event: async ({ event }: any) => {
-      const type = event?.type ?? ""
-      const props: any = event?.properties ?? event?.data ?? event ?? {}
-
-      let title = "opencode"
-      let priority = "default"
-      let tags = "information_source"
-      let payload: any = { type }
+      const type: string = event?.type ?? ""
+      const props: any = event?.properties ?? event?.data ?? {}
 
       switch (type) {
+        case "permission.updated":
         case "permission.asked": {
-          const permission = pick(props, "permission", "action") ?? "unknown"
-          const patterns = pick(props, "patterns", "resources") ?? []
-          payload = {
-            type,
+          const permission = pick(props, "permission", "type", "action") ?? "unknown"
+          const patterns = toArray(pick(props, "patterns", "pattern", "resources"))
+          const payload = {
+            type: "permission.asked",
             id: pick(props, "id", "requestID"),
-            sessionID: props.sessionID,
+            sessionID: props.sessionID ?? "",
             permission,
             patterns,
+            title: pick(props, "title") ?? permission,
           }
-          title = "权限请求 · " + permission
-          priority = "max"
-          tags = "lock"
+          await push(payload, "权限请求 · " + permission, "max", "lock")
           break
         }
         case "question.asked": {
-          payload = {
-            type,
+          const payload = {
+            type: "question.asked",
             id: pick(props, "id", "requestID"),
-            sessionID: props.sessionID,
+            sessionID: props.sessionID ?? "",
             questions: props.questions ?? [],
           }
-          title = "opencode 提问"
-          priority = "max"
-          tags = "grey_question"
+          await push(payload, "opencode 提问", "max", "grey_question")
           break
         }
-        case "session.idle": {
-          payload = { type, sessionID: props.sessionID }
-          title = "执行完成"
-          tags = "white_check_mark"
+        case "session.idle":
+          await push({ type: "session.idle", sessionID: props.sessionID }, "执行完成", "default", "white_check_mark")
           break
-        }
         case "session.error": {
           const err = props.error ?? {}
-          payload = {
-            type,
+          const payload = {
+            type: "session.error",
             sessionID: props.sessionID,
-            message: pick(err, "message") ?? pick(err.data, "message") ?? "执行出错",
+            message: pick(err, "message") ?? pick(err?.data, "message") ?? "执行出错",
           }
-          title = "执行失败"
-          priority = "high"
-          tags = "x"
+          await push(payload, "执行失败", "high", "x")
           break
         }
         default:
-          return
-      }
-
-      try {
-        const res = await fetch(`${NTFY_URL}/${TOPIC}`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Title: title,
-            Priority: priority,
-            Tags: tags,
-          },
-          body: JSON.stringify(payload),
-        })
-        if (!res.ok) {
-          console.error("[omessage] push failed:", res.status, await res.text())
-        }
-      } catch (e) {
-        console.error("[omessage] push error:", e)
+          break
       }
     },
   }
