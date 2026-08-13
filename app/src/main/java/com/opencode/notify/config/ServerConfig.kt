@@ -12,11 +12,14 @@ import kotlinx.coroutines.flow.map
 
 private val Context.dataStore by preferencesDataStore(name = "opencode_notify_config")
 
+const val DEFAULT_NTFY_URL = "https://ntfy.sh"
+
 data class ServerConfig(
     val host: String = "",
     val port: Int = 4096,
     val username: String = "opencode",
     val password: String = "",
+    val ntfyTopic: String = "",
     val enabled: Boolean = false,
 ) {
     val baseUrl: String
@@ -25,6 +28,8 @@ data class ServerConfig(
             if (h.isEmpty()) return ""
             return "http://$h:$port"
         }
+
+    val ntfyUrl: String get() = DEFAULT_NTFY_URL
 }
 
 class ServerConfigRepository(private val context: Context) {
@@ -34,6 +39,7 @@ class ServerConfigRepository(private val context: Context) {
         val PORT = intPreferencesKey("port")
         val USERNAME = stringPreferencesKey("username")
         val PASSWORD = stringPreferencesKey("password")
+        val NTFY_TOPIC = stringPreferencesKey("ntfy_topic")
         val ENABLED = booleanPreferencesKey("enabled")
     }
 
@@ -43,6 +49,7 @@ class ServerConfigRepository(private val context: Context) {
             port = p[Keys.PORT] ?: 4096,
             username = p[Keys.USERNAME] ?: "opencode",
             password = p[Keys.PASSWORD] ?: "",
+            ntfyTopic = p[Keys.NTFY_TOPIC] ?: "",
             enabled = p[Keys.ENABLED] ?: false,
         )
     }
@@ -55,6 +62,7 @@ class ServerConfigRepository(private val context: Context) {
             p[Keys.PORT] = config.port
             p[Keys.USERNAME] = config.username
             p[Keys.PASSWORD] = config.password
+            p[Keys.NTFY_TOPIC] = config.ntfyTopic
             p[Keys.ENABLED] = config.enabled
         }
     }

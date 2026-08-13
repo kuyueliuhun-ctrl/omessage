@@ -106,6 +106,7 @@ fun MainScreen(
     var port by remember { mutableStateOf("4096") }
     var username by remember { mutableStateOf("opencode") }
     var password by remember { mutableStateOf("") }
+    var ntfyTopic by remember { mutableStateOf("") }
 
     LaunchedEffect(Unit) {
         val c = repo.config.first()
@@ -113,6 +114,7 @@ fun MainScreen(
         port = c.port.toString()
         username = c.username
         password = c.password
+        ntfyTopic = c.ntfyTopic
     }
 
     Scaffold(topBar = { TopAppBar(title = { Text("OpenCode 通知") }) }) { padding ->
@@ -166,6 +168,22 @@ fun MainScreen(
                 )
             }
             item {
+                OutlinedTextField(
+                    value = ntfyTopic,
+                    onValueChange = { ntfyTopic = it },
+                    label = { Text("ntfy 主题 (与电脑插件一致)") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+            item {
+                Text(
+                    "电脑端插件的 OMESSAGE_TOPIC 需与此处相同，用一段随机字符串即可（如 omessage-a1b2c3）。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            item {
                 Button(
                     onClick = {
                         val cfg = ServerConfig(
@@ -173,6 +191,7 @@ fun MainScreen(
                             port = port.toIntOrNull() ?: 4096,
                             username = username,
                             password = password,
+                            ntfyTopic = ntfyTopic,
                             enabled = true,
                         )
                         scope.launch { repo.update(cfg) }

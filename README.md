@@ -1,81 +1,64 @@
-# OpenCode 通知（Android）
+# OpenCode 通知（omessage）
 
-通过局域网连接电脑上的 `opencode serve` 服务器，在以下事件发生时于手机弹窗通知（支持后台/锁屏）：
+当电脑上的 opencode 触发以下事件时，在手机弹窗通知（支持后台/锁屏）：
 
-| 事件 | 说明 | 是否可交互 |
+| 事件 | 说明 | 手机端可交互 |
 |---|---|---|
-| 权限请求 (`permission.asked` / `permission.updated`) | opencode 需要批准执行某操作 | 可「允许一次 / 总是允许 / 拒绝」 |
-| 问题抛出 (`question.asked`) | AI 执行中向用户提问 | 可全屏作答 / 跳过 |
+| 权限请求 (`permission.asked`) | opencode 需要批准执行某操作 | 「允许一次 / 总是允许 / 拒绝」 |
+| 问题抛出 (`question.asked`) | AI 执行中向用户提问 | 全屏作答 / 跳过 |
 | 执行完成 (`session.idle`) | 任务完成 | 仅提示 |
 | 执行失败 (`session.error`) | 任务出错 | 仅提示 |
 
-## 1. 电脑端启动 opencode 服务器
+## 工作原理
+
+```
+[电脑] opencode (TUI/桌面版/serve)
+        └── 插件 omessage.ts 监听事件 → POST 到 ntfy.sh/<主题>
+                                              │
+[手机] App 订阅 ntfy.sh/<主题> (SSE) ──────────┘
+        └── 弹窗通知；「允许/拒绝/作答」时 POST 回电脑 opencode 服务器
+```
+
+> 为什么用 ntfy.sh 中转：opencode 的权限/提问走「单消费者控制队列」，桌面版客户端独占它，手机作为第二个客户端无法直接订阅到这些事件。插件跑在 opencode 进程内、能直接监听事件，再经 ntfy 推送到手机。
+
+## 1. 电脑端：安装插件
+
+1. 把本仓库根目录的 `omessage.ts` 复制到插件目录（二选一）：
+   - 全局：`~/.config/opencode/plugins/omessage.ts`（Windows：`C:\Users\<你>\.config\opencode\plugins\omessage.ts`）
+   - 项目级：项目根目录 `.opencode/plugins/omessage.ts`
+2. 设置主题（随机长字符串，与手机 App 保持一致）并重启 opencode：
 
 ```powershell
-# 监听局域网（0.0.0.0 表示允许其它设备连接）
-opencode serve --hostname 0.0.0.0 --port 4096
+# Windows (PowerShell)
+$env:OMESSAGE_TOPIC = "omessage-a1b2c3d4e5f6"
+opencode serve --hostname 0.0.0.0 --port 4096   # 或直接运行 opencode TUI / 桌面版
 
-# 建议设置密码（App 支持 Basic 认证，用户名默认 opencode）
-$env:OPENCODE_SERVER_PASSWORD="你的密码"
-opencode serve --hostname 0.0.0.0 --port 4096
-
-# 可选：启用 mDNS 发现
-opencode serve --hostname 0.0.0.0 --port 4096 --mdns
+# macOS / Linux
+export OMESSAGE_TOPIC="omessage-a1b2c3d4e5f6"
 ```
 
-> - 电脑与手机必须在**同一局域网**。
-> - 需在 Windows 防火墙放行 4096 端口（或按提示允许）。
-> - 电脑运行 `opencode`（TUI）时本身也会启动一个服务器，但默认只监听 `127.0.0.1`；请用上面的 `--hostname 0.0.0.0` 显式启动。
+> - 可选：自建 ntfy 时设置 `OMESSAGE_NTFY_URL`（默认 `https://ntfy.sh`）。
+> - 电脑端 opencode 服务器需让手机能访问（用于回复），启动时加 `--hostname 0.0.0.0 --port 4096`，防火墙放行 4096。
 
-## 2. 推荐：让问题直接抛出（避免被提问权限拦截）
+## 2. 手机端：构建与使用
 
-在项目的 `opencode.json` 中加入，让 AI 提问无需额外批准，手机才能直接收到问题并作答：
+1. 用 Android Studio 打开本目录，Run 安装。
+2. 首次启动授予通知权限，建议加入电池优化白名单。
+3. 在 App 设置页填写：
+   - **主机 / 端口**：电脑的局域网 IP 与 opencode 端口（用于回复）
+   - **用户名 / 密码**：如设置了 `OPENCODE_SERVER_PASSWORD`
+   - **ntfy 主题**：与电脑插件 `OMESSAGE_TOPIC` 一致
+4. 点击「保存并连接」。之后 opencode 的四种事件都会推送到手机：
+   - 权限请求 → 通知上直接点「允许一次 / 总是允许 / 拒绝」
+   - 问题 → 点通知进入全屏答题页
 
-```json
-{
-  "$schema": "https://opencode.ai/config.json",
-  "permission": {
-    "question": "allow"
-  }
-}
-```
+## 3. 技术说明
 
-## 3. 构建与安装
-
-1. 安装 [Android Studio](https://developer.android.com/studio)（含 Android SDK）。
-2. 用 Android Studio 打开本目录（`File > Open` 选择项目根目录），等待 Gradle 同步完成。
-3. 连接手机（开启开发者选项 + USB 调试），点击 **Run**。
-   - 或 `Build > Build APK(s)` 后手动安装。
-4. 首次启动授予**通知权限**；建议在系统设置里把本 App 加入**电池优化白名单**（防止后台被休眠）。
-
-> 环境要求：JDK 17+，Android SDK Platform 35。若本机缺少 Gradle wrapper 的 `gradle-wrapper.jar`，在 Android Studio 中打开即可自动补全，或执行 `gradle wrapper`。
-
-## 4. 使用步骤
-
-1. 打开 App，填写电脑的局域网 IP（如 `192.168.1.100`）、端口 `4096`，如有密码一并填写。
-2. 点击 **保存并连接**。状态卡片显示「已连接」即成功。
-3. 之后电脑上 opencode 触发权限请求 / 提问 / 完成 / 失败，手机会弹出对应通知：
-   - **权限请求**：通知上直接点「允许一次 / 总是允许 / 拒绝」。
-   - **问题**：点通知进入全屏答题页，选择选项或填写自定义答案后「提交答案」。
-4. 事件日志会记录所有连接状态与事件，便于排查。
-
-## 5. 技术说明
-
-- 纯局域网直连，通过 **轮询 opencode 的 REST 接口** 获取事件，无需云服务（opencode 的会话级事件不通过 `/global/event` SSE 下发，轮询最可靠）：
-  - `GET /permission` —— 待审批的权限请求
-  - `GET /question` —— 待回答的问题
-  - `GET /session/status` —— 各会话状态（busy → idle 判定「完成」，busy → retry 判定「失败」）
-- 后台/锁屏：**前台服务**（`dataSync` 类型）保持轮询，权限/问题通知使用高优先级 + 全屏 Intent。
+- 推送链路：opencode 插件 → ntfy.sh（SSE 订阅），手机 App 用**前台服务**（`dataSync`）保持 ntfy 连接。
+- 回复链路：手机 App 直接 POST 到电脑 opencode 服务器（局域网），依次尝试 `POST /api/session/{sid}/permission/{id}/reply`、`POST /permission/{id}/reply`（`{reply}`）；问题用 `POST /api/session/{sid}/question/{id}/reply`（`{answers}`）。
 - 断线自动重连（指数退避 1s → 30s）。
 
-### 接口说明（针对 opencode 版本差异做容错）
+## 4. 已知限制
 
-- 权限回复：依次尝试 `POST /permission/{id}/reply`（`{reply}`）、`POST /api/session/{sid}/permission/{id}/reply`、`POST /session/{sid}/permissions/{id}`（`{response}`）。
-- 问题回复：`POST /question/{id}/reply`（`{answers}`）；跳过用 `POST /question/{id}/reject`。
-
-若你本机的 opencode 版本路径不同，可在 `net/OpencodeApi.kt` 中调整候选路径。
-
-## 6. 已知限制
-
-- 若电脑端 TUI 同时在操作，控制请求可能被 TUI 抢先处理（典型「人离开电脑」场景不受影响；权限走独立回复接口，无此问题）。
-- Android 15+ 对 `dataSync` 前台服务有 6 小时限制（个人工具足够）。
+- 推送依赖互联网（ntfy.sh）；如纯内网环境，可自建 ntfy 并把 `OMESSAGE_NTFY_URL` 和 App 指向它。
+- 「执行失败」依赖 `session.error` 事件；若 opencode 版本不同，可在 `omessage.ts` 中调整事件名。

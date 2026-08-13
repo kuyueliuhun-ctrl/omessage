@@ -51,20 +51,28 @@ class OpencodeApi(
 
     fun replyPermission(sessionId: String, permissionId: String, response: String): Boolean {
         val candidates = listOf(
-            "/permission/$permissionId/reply" to """{"reply":"$response"}""",
             "/api/session/$sessionId/permission/$permissionId/reply" to """{"reply":"$response"}""",
+            "/permission/$permissionId/reply" to """{"reply":"$response"}""",
             "/session/$sessionId/permissions/$permissionId" to """{"response":"$response"}""",
         )
         return candidates.any { (path, body) -> post(path, body) }
     }
 
-    fun replyQuestion(requestId: String, answers: List<List<String>>): Boolean {
+    fun replyQuestion(sessionId: String, requestId: String, answers: List<List<String>>): Boolean {
         val body = AppJson.encodeToString(QuestionReplyPayload(answers))
-        return post("/question/$requestId/reply", body)
+        val candidates = listOf(
+            "/api/session/$sessionId/question/$requestId/reply",
+            "/question/$requestId/reply",
+        )
+        return candidates.any { post(it, body) }
     }
 
-    fun rejectQuestion(requestId: String): Boolean {
-        return postEmpty("/question/$requestId/reject")
+    fun rejectQuestion(sessionId: String, requestId: String): Boolean {
+        val candidates = listOf(
+            "/api/session/$sessionId/question/$requestId/reject",
+            "/question/$requestId/reject",
+        )
+        return candidates.any { postEmpty(it) }
     }
 
     private fun get(path: String): String {

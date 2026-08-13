@@ -110,7 +110,7 @@ fun QuestionScreen(
                     submitting.value = true
                     scope.launch {
                         OpencodeApi(baseUrl, username, password)
-                            .replyQuestion(request.requestId, answers)
+                            .replyQuestion(request.sessionId, request.requestId, answers)
                         submitting.value = false
                         onDone()
                     }
@@ -124,7 +124,8 @@ fun QuestionScreen(
             OutlinedButton(
                 onClick = {
                     scope.launch {
-                        OpencodeApi(baseUrl, username, password).rejectQuestion(request.requestId)
+                        OpencodeApi(baseUrl, username, password)
+                            .rejectQuestion(request.sessionId, request.requestId)
                         onDone()
                     }
                 },
