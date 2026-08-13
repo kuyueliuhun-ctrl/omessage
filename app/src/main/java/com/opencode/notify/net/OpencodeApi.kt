@@ -1,11 +1,15 @@
 package com.opencode.notify.net
 
 import android.util.Base64
+import com.opencode.notify.model.PermissionItem
+import com.opencode.notify.model.QuestionApi
+import com.opencode.notify.model.SessionStatusItem
 import kotlinx.serialization.Serializable
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import java.io.IOException
 import java.util.concurrent.TimeUnit
 
 @Serializable
@@ -30,34 +34,45 @@ class OpencodeApi(
 
     private val jsonBodyType = "application/json; charset=utf-8".toMediaType()
 
-    fun health(): Boolean = runCatching {
-        execute(build("/global/health").build())?.isSuccessful == true
-    }.getOrDefault(false)
+    fun listPermissions(): List<PermissionItem> {
+        val body = get("/permission")
+        return if (body.isBlank()) emptyList() else AppJson.decodeFromString(body)
+    }
+
+    fun listQuestions(): List<QuestionApi> {
+        val body = get("/question")
+        return if (body.isBlank()) emptyList() else AppJson.decodeFromString(body)
+    }
+
+    fun listSessionStatus(): Map<String, SessionStatusItem> {
+        val body = get("/session/status")
+        return if (body.isBlank()) emptyMap() else AppJson.decodeFromString(body)
+    }
 
     fun replyPermission(sessionId: String, permissionId: String, response: String): Boolean {
         val candidates = listOf(
-            "/session/$sessionId/permissions/$permissionId" to """{"response":"$response"}""",
-            "/api/permission/$permissionId/reply" to """{"reply":"$response"}""",
             "/permission/$permissionId/reply" to """{"reply":"$response"}""",
+            "/api/session/$sessionId/permission/$permissionId/reply" to """{"reply":"$response"}""",
+            "/session/$sessionId/permissions/$permissionId" to """{"response":"$response"}""",
         )
         return candidates.any { (path, body) -> post(path, body) }
     }
 
     fun replyQuestion(requestId: String, answers: List<List<String>>): Boolean {
         val body = AppJson.encodeToString(QuestionReplyPayload(answers))
-        val candidates = listOf(
-            "/api/question/$requestId/reply",
-            "/question/$requestId/reply",
-        )
-        return candidates.any { post(it, body) }
+        return post("/question/$requestId/reply", body)
     }
 
     fun rejectQuestion(requestId: String): Boolean {
-        val candidates = listOf(
-            "/api/question/$requestId/reject",
-            "/question/$requestId/reject",
-        )
-        return candidates.any { postEmpty(it) }
+        return postEmpty("/question/$requestId/reject")
+    }
+
+    private fun get(path: String): String {
+        val request = build(path).get().build()
+        client.newCall(request).execute().use { resp ->
+            if (!resp.isSuccessful) throw IOException("HTTP ${resp.code}")
+            return resp.body?.string() ?: ""
+        }
     }
 
     private fun post(path: String, jsonBody: String): Boolean {

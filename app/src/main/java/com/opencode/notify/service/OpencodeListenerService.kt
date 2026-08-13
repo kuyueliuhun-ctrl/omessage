@@ -3,21 +3,15 @@ package com.opencode.notify.service
 import android.app.Service
 import android.content.Intent
 import android.os.IBinder
-import android.util.Base64
 import androidx.core.app.NotificationManagerCompat
 import com.opencode.notify.ConnectionStatus
 import com.opencode.notify.LogStore
 import com.opencode.notify.config.ServerConfigRepository
-import com.opencode.notify.model.EventTypes
-import com.opencode.notify.model.parseEvent
-import com.opencode.notify.model.sessionId
-import com.opencode.notify.model.toErrorMessage
-import com.opencode.notify.model.toPermissionRequest
-import com.opencode.notify.model.toQuestionRequest
+import com.opencode.notify.model.PermissionItem
+import com.opencode.notify.model.QuestionApi
+import com.opencode.notify.model.SessionStatusItem
 import com.opencode.notify.net.OpencodeApi
 import com.opencode.notify.notify.NotificationHelper
-import com.opencode.notify.sse.OpencodeEventSource
-import com.opencode.notify.sse.SseListener
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -28,8 +22,6 @@ import kotlinx.coroutines.launch
 class OpencodeListenerService : Service() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private var source: OpencodeEventSource? = null
-    private var backoffMs = 1000L
 
     @Volatile
     private var running = false
@@ -38,6 +30,10 @@ class OpencodeListenerService : Service() {
     private var username = "opencode"
     private var password = ""
     private var api: OpencodeApi? = null
+
+    private val seenPermissions = mutableSetOf<String>()
+    private val seenQuestions = mutableSetOf<String>()
+    private val lastStatus = mutableMapOf<String, String>()
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -64,7 +60,7 @@ class OpencodeListenerService : Service() {
                 username = cfg.username
                 password = cfg.password
                 api = OpencodeApi(baseUrl, username, password)
-                connect()
+                pollLoop()
             }
         }
         return START_STICKY
@@ -72,56 +68,89 @@ class OpencodeListenerService : Service() {
 
     override fun onDestroy() {
         running = false
-        source?.stop()
-        source = null
         scope.cancel()
         LogStore.setStatus(ConnectionStatus.DISCONNECTED)
         super.onDestroy()
     }
 
-    private fun connect() {
-        if (!running) return
-        val url = "$baseUrl/global/event"
-        val authHeader = if (password.isNotBlank()) {
-            "Basic " + Base64.encodeToString("$username:$password".toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
-        } else {
-            null
-        }
-        LogStore.add("连接 $url ...")
-        updateStatusNotification("连接 $url ...")
-
-        source = OpencodeEventSource(url, authHeader).also { src ->
-            src.start(object : SseListener {
-                override fun onOpen() {
-                    backoffMs = 1000L
+    private suspend fun pollLoop() {
+        var backoff = 1000L
+        while (running) {
+            val ok = pollOnce()
+            if (ok) {
+                backoff = 1000L
+                if (LogStore.status.value != ConnectionStatus.CONNECTED) {
                     LogStore.setStatus(ConnectionStatus.CONNECTED)
-                    LogStore.add("已连接")
+                    LogStore.add("已连接 opencode")
                     updateStatusNotification("已连接 opencode")
                 }
-
-                override fun onMessage(data: String) = dispatch(data)
-
-                override fun onFailure(error: Throwable?) {
-                    if (!running) return
-                    LogStore.setStatus(ConnectionStatus.ERROR)
-                    LogStore.add("连接断开: ${error?.message ?: "未知错误"}")
-                    updateStatusNotification("连接断开，${backoffMs / 1000}s 后重连")
-                    scheduleReconnect()
-                }
-
-                override fun onClosed() {
-                    if (!running) LogStore.setStatus(ConnectionStatus.DISCONNECTED)
-                }
-            })
+                delay(POLL_INTERVAL_MS)
+            } else {
+                LogStore.setStatus(ConnectionStatus.ERROR)
+                updateStatusNotification("连接断开，${backoff / 1000}s 后重连")
+                delay(backoff)
+                backoff = (backoff * 2).coerceAtMost(30_000L)
+            }
         }
     }
 
-    private fun scheduleReconnect() {
-        scope.launch {
-            delay(backoffMs)
-            backoffMs = (backoffMs * 2).coerceAtMost(30_000L)
-            if (running) connect()
+    private fun pollOnce(): Boolean {
+        val a = api ?: return false
+        return try {
+            processPermissions(a.listPermissions())
+            processQuestions(a.listQuestions())
+            processStatuses(a.listSessionStatus())
+            true
+        } catch (e: Exception) {
+            LogStore.add("轮询失败: ${e.message}")
+            false
         }
+    }
+
+    private fun processPermissions(items: List<PermissionItem>) {
+        val currentIds = items.map { it.id }.toHashSet()
+        seenPermissions.retainAll(currentIds)
+        for (item in items) {
+            if (!seenPermissions.add(item.id)) continue
+            if (item.permission == "question") {
+                scope.launch { api?.replyPermission(item.sessionID, item.id, "once") }
+                LogStore.add("自动允许提问权限")
+                continue
+            }
+            val req = item.toRequest()
+            LogStore.add("权限请求[${req.permission}]: ${req.title}")
+            NotificationHelper.showPermission(this, req, baseUrl, username, password)
+        }
+    }
+
+    private fun processQuestions(items: List<QuestionApi>) {
+        val currentIds = items.map { it.id }.toHashSet()
+        seenQuestions.retainAll(currentIds)
+        for (item in items) {
+            if (!seenQuestions.add(item.id)) continue
+            val q = item.toRequest()
+            LogStore.add("问题抛出: " + q.questions.joinToString(" | ") { it.question })
+            NotificationHelper.showQuestion(this, q, baseUrl, username, password)
+        }
+    }
+
+    private fun processStatuses(statuses: Map<String, SessionStatusItem>) {
+        for ((sessionId, status) in statuses) {
+            val prev = lastStatus[sessionId]
+            val curr = status.type
+            when {
+                prev == "busy" && curr == "idle" -> {
+                    LogStore.add("执行完成 ($sessionId)")
+                    NotificationHelper.showCompletion(this, sessionId)
+                }
+                prev == "busy" && curr == "retry" -> {
+                    LogStore.add("执行失败 ($sessionId): ${status.message.orEmpty()}")
+                    NotificationHelper.showFailure(this, sessionId, status.message)
+                }
+            }
+            lastStatus[sessionId] = curr
+        }
+        lastStatus.keys.retainAll(statuses.keys)
     }
 
     private fun updateStatusNotification(text: String) {
@@ -131,42 +160,9 @@ class OpencodeListenerService : Service() {
         )
     }
 
-    private fun dispatch(data: String) {
-        val event = parseEvent(data) ?: return
-        when {
-            event.type == EventTypes.SESSION_IDLE -> {
-                val sid = event.sessionId()
-                LogStore.add("执行完成" + (sid?.let { " ($it)" } ?: ""))
-                NotificationHelper.showCompletion(this, sid)
-            }
-
-            event.type == EventTypes.SESSION_ERROR -> {
-                val msg = event.toErrorMessage()
-                LogStore.add("执行失败: ${msg ?: "未知错误"}")
-                NotificationHelper.showFailure(this, event.sessionId(), msg)
-            }
-
-            EventTypes.isPermission(event.type) -> {
-                val req = event.toPermissionRequest() ?: return
-                if (req.permission == "question") {
-                    scope.launch { api?.replyPermission(req.sessionId, req.permissionId, "once") }
-                    LogStore.add("自动允许提问权限")
-                    return
-                }
-                LogStore.add("权限请求[${req.permission}]: ${req.title}")
-                NotificationHelper.showPermission(this, req, baseUrl, username, password)
-            }
-
-            event.type == EventTypes.QUESTION_ASKED -> {
-                val q = event.toQuestionRequest() ?: return
-                LogStore.add("问题抛出: " + q.questions.joinToString(" | ") { it.question })
-                NotificationHelper.showQuestion(this, q, baseUrl, username, password)
-            }
-        }
-    }
-
     companion object {
         const val ACTION_START = "com.opencode.notify.action.START"
         const val ACTION_STOP = "com.opencode.notify.action.STOP"
+        private const val POLL_INTERVAL_MS = 1500L
     }
 }

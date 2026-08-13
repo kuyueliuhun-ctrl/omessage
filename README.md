@@ -61,15 +61,17 @@ opencode serve --hostname 0.0.0.0 --port 4096 --mdns
 
 ## 5. 技术说明
 
-- 纯局域网直连：手机通过 **SSE（`GET /global/event`）** 订阅 opencode 事件，通过 REST 回传决定/答案，无需云服务。
-- 后台/锁屏：**前台服务**（`dataSync` 类型）保持长连接，权限/问题通知使用高优先级 + 全屏 Intent。
+- 纯局域网直连，通过 **轮询 opencode 的 REST 接口** 获取事件，无需云服务（opencode 的会话级事件不通过 `/global/event` SSE 下发，轮询最可靠）：
+  - `GET /permission` —— 待审批的权限请求
+  - `GET /question` —— 待回答的问题
+  - `GET /session/status` —— 各会话状态（busy → idle 判定「完成」，busy → retry 判定「失败」）
+- 后台/锁屏：**前台服务**（`dataSync` 类型）保持轮询，权限/问题通知使用高优先级 + 全屏 Intent。
 - 断线自动重连（指数退避 1s → 30s）。
 
 ### 接口说明（针对 opencode 版本差异做容错）
 
-- 权限回复：依次尝试 `POST /session/{id}/permissions/{permissionID}`（`{response}`）、`POST /api/permission/{id}/reply`（`{reply}`）、`POST /permission/{id}/reply`。
-- 问题回复：依次尝试 `POST /api/question/{id}/reply`、`POST /question/{id}/reply`（`{answers}`）；跳过用对应 `reject` 端点。
-- 事件类型同时兼容 `permission.updated`（旧）与 `permission.asked`（新）。
+- 权限回复：依次尝试 `POST /permission/{id}/reply`（`{reply}`）、`POST /api/session/{sid}/permission/{id}/reply`、`POST /session/{sid}/permissions/{id}`（`{response}`）。
+- 问题回复：`POST /question/{id}/reply`（`{answers}`）；跳过用 `POST /question/{id}/reject`。
 
 若你本机的 opencode 版本路径不同，可在 `net/OpencodeApi.kt` 中调整候选路径。
 
