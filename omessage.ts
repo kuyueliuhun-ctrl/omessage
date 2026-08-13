@@ -15,9 +15,19 @@ function toArray(v: any): any[] {
   return Array.isArray(v) ? v : [v]
 }
 
-export const OMessagePlugin: Plugin = async () => {
+export const OMessagePlugin: Plugin = async ({ client }) => {
+  const log = async (level: "debug" | "info" | "warn" | "error", message: string, extra?: any) => {
+    try {
+      await client.app.log({ body: { service: "omessage", level, message, extra } })
+    } catch {
+      // ignore logging failures
+    }
+  }
+
+  await log("info", `plugin loaded, TOPIC=${TOPIC || "<EMPTY>"}`)
+
   if (!TOPIC) {
-    console.log("[omessage] OMESSAGE_TOPIC not set, plugin disabled")
+    await log("warn", "OMESSAGE_TOPIC not set, plugin disabled")
     return {}
   }
 
@@ -33,59 +43,67 @@ export const OMessagePlugin: Plugin = async () => {
         },
         body: JSON.stringify(payload),
       })
-      if (!res.ok) console.error("[omessage] push failed:", res.status, await res.text())
-    } catch (e) {
-      console.error("[omessage] push error:", e)
+      await log("info", `push "${title}" -> HTTP ${res.status}`)
+      if (!res.ok) await log("error", `push failed: ${res.status} ${await res.text()}`)
+    } catch (e: any) {
+      await log("error", `push error: ${e?.message ?? String(e)}`)
+    }
+  }
+
+  const seenTypes = new Set<string>()
+
+  async function onEvent(type: string, props: any) {
+    if (type && !seenTypes.has(type)) {
+      seenTypes.add(type)
+      await log("info", `event seen: ${type}`, JSON.stringify(props))
+    }
+    switch (type) {
+      case "permission.updated":
+      case "permission.asked": {
+        const permission = pick(props, "permission", "type", "action") ?? "unknown"
+        const patterns = toArray(pick(props, "patterns", "pattern", "resources"))
+        const payload = {
+          type: "permission.asked",
+          id: pick(props, "id", "requestID"),
+          sessionID: props.sessionID ?? "",
+          permission,
+          patterns,
+          title: pick(props, "title") ?? permission,
+        }
+      await push(payload, "permission:" + permission, "max", "lock")
+        break
+      }
+      case "question.asked": {
+        const payload = {
+          type: "question.asked",
+          id: pick(props, "id", "requestID"),
+          sessionID: props.sessionID ?? "",
+          questions: props.questions ?? [],
+        }
+          await push(payload, "question", "max", "grey_question")
+        break
+      }
+      case "session.idle":
+        await push({ type: "session.idle", sessionID: props.sessionID }, "idle", "default", "white_check_mark")
+        break
+      case "session.error": {
+        const err = props.error ?? {}
+        const payload = {
+          type: "session.error",
+          sessionID: props.sessionID,
+          message: pick(err, "message") ?? pick(err?.data, "message") ?? "执行出错",
+        }
+          await push(payload, "error", "high", "x")
+        break
+      }
+      default:
+        break
     }
   }
 
   return {
     event: async ({ event }: any) => {
-      const type: string = event?.type ?? ""
-      const props: any = event?.properties ?? event?.data ?? {}
-
-      switch (type) {
-        case "permission.updated":
-        case "permission.asked": {
-          const permission = pick(props, "permission", "type", "action") ?? "unknown"
-          const patterns = toArray(pick(props, "patterns", "pattern", "resources"))
-          const payload = {
-            type: "permission.asked",
-            id: pick(props, "id", "requestID"),
-            sessionID: props.sessionID ?? "",
-            permission,
-            patterns,
-            title: pick(props, "title") ?? permission,
-          }
-          await push(payload, "权限请求 · " + permission, "max", "lock")
-          break
-        }
-        case "question.asked": {
-          const payload = {
-            type: "question.asked",
-            id: pick(props, "id", "requestID"),
-            sessionID: props.sessionID ?? "",
-            questions: props.questions ?? [],
-          }
-          await push(payload, "opencode 提问", "max", "grey_question")
-          break
-        }
-        case "session.idle":
-          await push({ type: "session.idle", sessionID: props.sessionID }, "执行完成", "default", "white_check_mark")
-          break
-        case "session.error": {
-          const err = props.error ?? {}
-          const payload = {
-            type: "session.error",
-            sessionID: props.sessionID,
-            message: pick(err, "message") ?? pick(err?.data, "message") ?? "执行出错",
-          }
-          await push(payload, "执行失败", "high", "x")
-          break
-        }
-        default:
-          break
-      }
+      await onEvent(event?.type ?? "", event?.properties ?? event?.data ?? {})
     },
   }
 }
