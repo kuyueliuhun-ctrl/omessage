@@ -5,6 +5,8 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
@@ -78,7 +80,7 @@ fun OpencodeEvent.toPermissionRequest(): PermissionRequest? {
     val id = properties.str("id") ?: properties.str("requestID") ?: return null
     val sessionId = properties.str("sessionID") ?: return null
     val permission = properties.str("type") ?: properties.str("permission") ?: "unknown"
-    val patterns = properties.strList("patterns") ?: properties.strList("pattern")
+    val patterns = properties.strList("patterns") ?: properties.strList("pattern") ?: emptyList()
     val title = properties.str("title")
         ?: properties.str("description")
         ?: buildString {
@@ -102,7 +104,7 @@ fun OpencodeEvent.toQuestionRequest(): QuestionRequest? {
             question = question,
             header = obj.str("header"),
             options = options,
-            multiple = obj.boolean("multiple"),
+            multiple = obj.boolean("multiple") ?: false,
             custom = obj.boolean("custom") ?: true,
         )
     }
