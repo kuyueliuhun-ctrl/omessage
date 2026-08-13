@@ -194,8 +194,10 @@ fun MainScreen(
                             ntfyTopic = ntfyTopic,
                             enabled = true,
                         )
-                        scope.launch { repo.update(cfg) }
-                        onConnect(cfg)
+                        scope.launch {
+                            repo.update(cfg)
+                            onConnect(cfg)
+                        }
                     },
                     modifier = Modifier.fillMaxWidth(),
                 ) { Text("保存并连接") }
